@@ -77,6 +77,8 @@ tr:last-child td{border-bottom:0}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;z-index:20;max-width:90vw;box-shadow:0 8px 24px #0004}
 .toast.warn{background:var(--warn);color:#14202b}
 .alert{background:var(--warn-bg);border-radius:12px;padding:10px 14px;margin-bottom:14px;color:#9a6a00;font-weight:500}
+.auth-main{max-width:520px;margin:8vh auto}.auth-main p{color:var(--mute)}
+body.dashv{--bg:#eef1f4;--card:#fff;--ink:#000;--mute:#000;--line:#d3dae1;--pri:#0d6b5c;--pri-ink:#fff;--warn-bg:#fdf0cf;--bad:#c9372c;--bad-bg:#fbe3e0;--ok-bg:#d8f0ea}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .alert{color:var(--warn)}}
 body.dashv{--bg:#eef1f4;--card:#fff;--ink:#000;--mute:#000;--line:#d3dae1;--pri:#0d6b5c;--pri-ink:#fff;--warn-bg:#fdf0cf;--bad:#c9372c;--bad-bg:#fbe3e0;--ok-bg:#d8f0ea}
 @media (max-width:860px){
@@ -98,6 +100,11 @@ main{padding:18px 14px 96px}
 <main id="main"></main>
 </div>
 <div id="modal"></div><div id="toast"></div>
+<script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="firebase.js"></script>
 <script>
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const money=n=>'KSh '+Math.round(n).toLocaleString('en-KE'), TAX=.16;
@@ -109,7 +116,7 @@ let P=[
 ['SKU-3003','Fresh milk 500ml','Drinks','🥛',55,65,30,12],['SKU-4001','Tomatoes 1kg','Fresh','🍅',90,130,22,10],
 ['SKU-4002','Hass avocados (4)','Fresh','🥑',60,100,7,8],['SKU-4003','Sukuma wiki bunch','Fresh','🥬',10,20,16,8]
 ].map((a,i)=>({id:'p'+i,sku:a[0],name:a[1],cat:a[2],emoji:a[3],cost:a[4],price:a[5],stock:a[6],reorder:a[7]}));
-let M=[],S=[],cart=[],disc=0,view='dash',role='owner',q='';
+let M=[],S=[],cart=[],disc=0,view='dash',role='owner',q='',user=null,storeId='';
 const now=()=>new Date();
 const hm=d=>d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 const dm=d=>d.toLocaleDateString([],{month:'short',day:'numeric'})+' '+hm(d);
@@ -119,23 +126,41 @@ const ROLES={owner:'Owner / Admin',manager:'Manager',cashier:'Cashier'};
 const can={dash:['owner','manager'],sell:['owner','manager','cashier'],prods:['owner','manager','cashier'],log:['owner','manager'],edit:['owner','manager'],refund:['owner','manager']};
 const ok=k=>can[k].includes(role);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function mv(p,type,qty,ref,note){p.stock+=qty;M.unshift({t:now(),pid:p.id,name:p.name,type,qty,ref,by:ROLES[role],note:note||''})}
+function mv(p,type,qty,ref,note){p.stock+=qty;const movement={id:'M'+uid(),t:now(),pid:p.id,name:p.name,type,qty,ref,by:ROLES[role],note:note||''};M.unshift(movement);return movement}
+const collection=name=>window.shopkeepDb.collection('shops').doc(storeId).collection(name);
+async function persistChanges({products=[],sales=[],movements=[]}){
+ const batch=window.shopkeepDb.batch();
+ products.forEach(p=>batch.set(collection('products').doc(p.id),p));
+ sales.forEach(s=>batch.set(collection('sales').doc(s.id),s));
+ movements.forEach(m=>batch.set(collection('stock_movements').doc(m.id),m));
+ await batch.commit();
+}
+async function persistOrReload(changes){
+ try{await persistChanges(changes);return true}
+ catch(e){if(user)await loadStore(user);toast('Could not save to Firebase: '+e.message,1);return false}
+}
+const dateValue=v=>v&&typeof v.toDate=='function'?v.toDate():new Date(v);
+async function loadStore(current){
+ const claims=(await current.getIdTokenResult()).claims;
+ storeId=claims.storeId||current.uid;
+ role=['owner','manager','cashier'].includes(claims.role)?claims.role:(storeId==current.uid?'owner':'cashier');
+ const [products,sales,movements]=await Promise.all(['products','sales','stock_movements'].map(name=>collection(name).get()));
+ if(products.empty&&storeId==current.uid&&P.length){
+  const batch=window.shopkeepDb.batch();P.forEach(p=>batch.set(collection('products').doc(p.id),p));await batch.commit();
+ }else P=products.docs.map(d=>({...d.data(),id:d.id}));
+ S=sales.docs.map(d=>{const x=d.data();return{...x,id:d.id,t:dateValue(x.t)}});
+ M=movements.docs.map(d=>{const x=d.data();return{...x,id:d.id,t:dateValue(x.t)}});
+ render();
+}
 function status(p){return p.stock<=0?['out','Out of stock']:p.stock<=p.reorder?['low','Low · '+p.stock+' left']:['','In stock · '+p.stock]}
 function toast(m,w){const t=$('#toast');t.innerHTML=`<div class="toast ${w?'warn':''}" role="status">${esc(m)}</div>`;clearTimeout(toast.h);toast.h=setTimeout(()=>t.innerHTML='',3200)}
 function closeM(){$('#modal').innerHTML=''}
 function modal(h){$('#modal').innerHTML=`<div class="modal" data-act="bg"><div class="box" role="dialog" aria-modal="true">${h}</div></div>`;const i=$('#modal input,#modal select');i&&i.focus()}
 
-// seed some sales/movements for today
-[[['p0',1],['p3',2]],[['p6',1],['p7',1],['p8',2]],[['p9',3]]].forEach((items,i)=>{
- const it=items.map(([id,qty])=>{const p=P.find(x=>x.id===id);return{id,name:p.name,qty,price:p.price}});
- const sub=it.reduce((a,l)=>a+l.qty*l.price,0);
- S.unshift({id:'S'+uid(),t:new Date(Date.now()-(i+1)*52*6e4),items:it,sub,disc:0,tax:sub*TAX,total:sub*(1+TAX),status:'paid',by:'Cashier'})});
-M.unshift({t:new Date(Date.now()-36e5*3),pid:'p5',name:'Chapati pack of 5',type:'sold',qty:-4,ref:'S-seed',by:'Cashier',note:''});
-
 function nav(){
  const T=[['dash','▦','Dashboard'],['sell','＋','Sell'],['prods','▤','Products'],['log','⇅','Stock log']].filter(t=>ok(t[0]));
  $('#nav').innerHTML=`<div class="brand">shop<i>keep</i></div>`+T.map(t=>`<button class="tab ${view===t[0]?'on':''}" data-act="go" data-v="${t[0]}"><span>${t[1]}</span>${t[2]}</button>`).join('')+
- `<div class="who">Signed in as<select data-act="role" aria-label="Switch role">${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${k==role?'selected':''}>${v}</option>`).join('')}</select><small style="display:block;margin-top:6px">Demo only: roles come from Firebase custom claims.</small></div>`;
+ `<div class="who">${esc(user.email||'Signed in')}<small style="display:block;margin-top:4px">${ROLES[role]}</small><button class="btn sm" style="margin-top:8px" data-act="signout">Sign out</button></div>`;
 }
 function render(){
  if(!ok(view))view='sell';nav();document.body.classList.toggle('dashv',view=='dash');
@@ -144,7 +169,7 @@ function render(){
 const low=()=>P.filter(p=>p.stock<=p.reorder);
 
 function dash(){
- const today=S.filter(s=>s.status=='paid'&&s.t.toDateString()==now().toDateString());
+ const today=S.filter(s=>s.status!='refunded'&&s.t.toDateString()==now().toDateString());
  const rev=today.reduce((a,s)=>a+s.total,0),avg=today.length?rev/today.length:0;
  const cost=P.reduce((a,p)=>a+p.cost*p.stock,0),retail=P.reduce((a,p)=>a+p.price*p.stock,0);
  const wk=[...WEEK,rev],mx=Math.max(...wk),days=[...Array(7)].map((_,i)=>new Date(Date.now()-(6-i)*864e5).toLocaleDateString([],{weekday:'short'}));
@@ -155,7 +180,7 @@ function dash(){
  <div class="card"><h2>Needs restocking</h2>${L.length?L.map(p=>`<div class="line"><span style="font-size:22px">${p.emoji}</span><div class="n">${esc(p.name)}<small>Reorder at ${p.reorder}</small></div><span class="pill ${status(p)[0]}">${p.stock}</span></div>`).join(''):'<div class="empty">Everything is above its reorder level.</div>'}
  ${slow.length?`<p style="color:var(--mute);font-size:13px;margin:12px 0 0">Slow-moving, no sales yet: ${slow.slice(0,4).map(p=>esc(p.name)).join(', ')}</p>`:''}</div></div>
  <div class="card" style="margin-top:16px"><h2 style="margin-bottom:6px">Recent sales</h2><div class="scroll"><table><tr><th>Receipt</th><th>Time</th><th>Items</th><th class="num">Total</th><th>Status</th><th></th></tr>
- ${S.slice(0,8).map(s=>`<tr><td>${s.id}</td><td>${dm(s.t)}</td><td>${s.items.reduce((a,i)=>a+i.qty,0)}</td><td class="num">${money(s.total)}</td><td><span class="pill ${s.status}">${s.status}</span></td><td class="num">${s.status=='paid'&&ok('refund')?`<button class="btn sm bad" data-act="refund" data-id="${s.id}">Refund</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No sales yet. Open Sell to ring one up.</td></tr>'}</table></div></div>`;
+ ${S.slice(0,8).map(s=>`<tr><td>${s.id}</td><td>${dm(s.t)}</td><td>${s.items.reduce((a,i)=>a+i.qty,0)}</td><td class="num">${money(s.total)}</td><td><span class="pill ${s.status}">${s.status}</span></td><td class="num">${s.status!='refunded'&&ok('refund')?`<button class="btn sm bad" data-act="refund" data-id="${s.id}">Refund</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No sales yet. Open Sell to ring one up.</td></tr>'}</table></div></div>`;
 }
 
 function sell(){
@@ -182,28 +207,29 @@ function cartUI(){
  `<div class="tot" style="margin-top:10px"><span>Subtotal</span><span>${money(t.sub)}</span></div>
  <div class="tot"><span>Discount <select data-act="disc" style="width:auto;padding:2px 6px" aria-label="Discount">${[0,5,10,20].map(d=>`<option value="${d}" ${d==disc?'selected':''}>${d}%</option>`).join('')}</select></span><span>−${money(t.d)}</span></div>
  <div class="tot"><span>VAT (16%)</span><span>${money(t.tax)}</span></div><div class="tot big"><span>Total</span><span>${money(t.total)}</span></div>
- <div class="row" style="margin-top:14px"><button class="btn" data-act="clear" ${cart.length?'':'disabled'}>Clear</button><button class="btn pri" style="flex:1" data-act="pay" ${cart.length?'':'disabled'}>Pay ${money(t.total)}</button></div>`;
+ <div class="row" style="margin-top:14px"><button class="btn" data-act="clear" ${cart.length?'':'disabled'}>Clear</button><button class="btn pri" style="flex:1" data-act="pay" ${cart.length?'':'disabled'}>Record sale · ${money(t.total)}</button></div>`;
 }
 function payModal(){
  const t=totals();
- modal(`<h2>Card payment</h2><p style="color:var(--mute);margin:0 0 12px">Stripe Checkout opens here in the real app. This is test mode.</p><div class="f"><label>Card number<input value="4242 4242 4242 4242" inputmode="numeric"></label><div class="f2"><label>Expiry<input value="12 / 30"></label><label>CVC<input value="123"></label></div><label>Receipt email (optional)<input id="em" type="email" placeholder="customer@example.com"></label></div>
- <div class="row"><button class="btn" data-act="close">Cancel</button><button class="btn pri" id="paybtn" data-act="confirm">Pay ${money(t.total)}</button></div>`);
+ modal(`<h2>Record sale</h2><p style="color:var(--mute);margin:0 0 12px">Demo only: this records a sale in Firestore but does not charge a card.</p><div class="f"><label>Receipt email (optional)<input id="em" type="email" placeholder="customer@example.com"></label></div>
+ <div class="row"><button class="btn" data-act="close">Cancel</button><button class="btn pri" id="paybtn" data-act="confirm">Record ${money(t.total)}</button></div>`);
 }
-function confirmPay(){
- const b=$('#paybtn');b.disabled=true;b.textContent='Processing…';
- setTimeout(()=>{
+async function confirmPay(){
+ const b=$('#paybtn');b.disabled=true;b.textContent='Saving…';
+ setTimeout(async()=>{
   const t=totals(),id='S'+uid(),email=($('#em')||{}).value||'';
   const items=cart.map(l=>{const p=P.find(x=>x.id==l.id);return{id:p.id,name:p.name,qty:l.qty,price:p.price}});
-  const sale={id,t:now(),items,sub:t.sub,disc:t.d,tax:t.tax,total:t.total,status:'paid',by:ROLES[role],email};
-  S.unshift(sale);const lows=[];
-  items.forEach(i=>{const p=P.find(x=>x.id==i.id),was=p.stock>p.reorder;mv(p,'sold',-i.qty,id);if(was&&p.stock<=p.reorder)lows.push(p.name)});
+  const sale={id,t:now(),items,sub:t.sub,disc:t.d,tax:t.tax,total:t.total,status:'recorded',by:ROLES[role],email};
+    S.unshift(sale);const lows=[],movements=[];
+    items.forEach(i=>{const p=P.find(x=>x.id==i.id),was=p.stock>p.reorder;movements.push(mv(p,'sold',-i.qty,id));if(was&&p.stock<=p.reorder)lows.push(p.name)});
+    if(!await persistOrReload({sales:[sale],products:[...new Map(items.map(i=>{const p=P.find(x=>x.id==i.id);return[p.id,p]})).values()],movements}))return;
   cart=[];disc=0;receipt(sale);
   view=='sell'&&(tiles(),cartUI());
   if(lows.length)setTimeout(()=>toast('Low stock: '+lows.join(', '),1),400);
  },1100);
 }
 function receipt(s){
- modal(`<h2>Payment received ✓</h2><p style="color:var(--mute);margin:0 0 10px">Receipt ${s.id} · ${dm(s.t)}${s.email?'<br>Sent to '+esc(s.email):''}</p>
+ modal(`<h2>Sale recorded</h2><p style="color:var(--mute);margin:0 0 10px">Receipt ${s.id} · ${dm(s.t)}${s.email?'<br>Sent to '+esc(s.email):''}</p>
  ${s.items.map(i=>`<div class="line"><div class="n">${i.qty} × ${esc(i.name)}</div><span>${money(i.qty*i.price)}</span></div>`).join('')}
  <div class="tot" style="margin-top:8px"><span>Discount</span><span>−${money(s.disc)}</span></div><div class="tot"><span>VAT</span><span>${money(s.tax)}</span></div><div class="tot big"><span>Total</span><span>${money(s.total)}</span></div>
  <div class="row"><button class="btn" data-act="print">Print</button><button class="btn pri" data-act="close">New sale</button></div>`);
@@ -233,21 +259,22 @@ function saveProd(id){
  if(!name||!sku||v('price')==='')return toast('Name, SKU and sell price are required.',1);
  if(P.some(x=>x.id!=id&&x.sku.toLowerCase()==sku.toLowerCase()))return toast('That SKU already exists.',1);
  const d={name,sku,cat:v('cat')||'General',cost:+v('cost')||0,price:+v('price'),reorder:+v('re')||0};
- if(id)Object.assign(P.find(x=>x.id==id),d);
- else{const p={id:'p'+uid(),emoji:'📦',stock:0,...d};P.push(p);+v('stock')>0&&mv(p,'received',+v('stock'),'Opening stock')}
- closeM();toast('Product saved.');render();
+ let p,movement;
+ if(id){p=P.find(x=>x.id==id);Object.assign(p,d)}
+ else{p={id:'p'+uid(),emoji:'📦',stock:0,...d};P.push(p);+v('stock')>0&&(movement=mv(p,'received',+v('stock'),'Opening stock'))}
+ closeM();persistOrReload({products:[p],movements:movement?[movement]:[]}).then(saved=>{if(saved){toast('Product saved.');render()}});
 }
 function adjModal(id){
  const p=P.find(x=>x.id==id);
  modal(`<h2>Adjust stock</h2><p style="color:var(--mute);margin:0 0 12px">${esc(p.name)} · ${p.stock} on hand. Every change is logged, never overwritten.</p><div class="f"><label>Reason<select id="a-type"><option value="received">Received delivery (+)</option><option value="damage">Damaged (−)</option><option value="shrinkage">Lost or stolen (−)</option></select></label><label>Quantity<input id="a-qty" type="number" min="1" value="1"></label><label>Note (optional)<input id="a-note"></label></div>
  <div class="row"><button class="btn" data-act="close">Cancel</button><button class="btn pri" data-act="saveadj" data-id="${id}">Save adjustment</button></div>`);
 }
-function saveAdj(id){
+async function saveAdj(id){
  const p=P.find(x=>x.id==id),t=$('#a-type').value,n=Math.floor(+$('#a-qty').value);
  if(!(n>0))return toast('Enter a quantity above zero.',1);
  const d=t=='received'?n:-n;if(p.stock+d<0)return toast('That would take stock below zero.',1);
- const was=p.stock>p.reorder;mv(p,t=='received'?'received':'adjustment',d,t+'-'+uid(),($('#a-note').value||t));
- closeM();toast('Stock updated.');render();
+ const was=p.stock>p.reorder,movement=mv(p,t=='received'?'received':'adjustment',d,t+'-'+uid(),($('#a-note').value||t));
+ closeM();if(!await persistOrReload({products:[p],movements:[movement]}))return;toast('Stock updated.');render();
  if(was&&p.stock<=p.reorder)setTimeout(()=>toast(p.name+' is now low on stock.',1),300);
 }
 
@@ -255,10 +282,10 @@ function log(){
  $('#main').innerHTML=`<div class="head"><div><h1>Stock log</h1><p>A permanent record of every change to stock.</p></div><button class="btn" data-act="csv" data-w="log">Copy log CSV</button></div>
  <div class="card"><div class="scroll"><table><tr><th>When</th><th>Product</th><th>Type</th><th class="num">Change</th><th>Reference</th><th>By</th></tr>${M.map(m=>`<tr><td>${dm(m.t)}</td><td>${esc(m.name)}</td><td>${m.type}</td><td class="num" style="color:${m.qty<0?'var(--bad)':'var(--pri)'};font-weight:700">${m.qty>0?'+':''}${m.qty}</td><td>${esc(m.ref)}</td><td>${esc(m.by)}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No movements yet.</td></tr>'}</table></div></div>`;
 }
-function refund(id){
- const s=S.find(x=>x.id==id);if(!s||s.status!='paid')return;
- s.status='refunded';s.items.forEach(i=>mv(P.find(p=>p.id==i.id),'return',i.qty,id));
- toast(`Refunded ${money(s.total)}. Stock restored.`);render();
+async function refund(id){
+ const s=S.find(x=>x.id==id);if(!s||s.status=='refunded')return;
+ s.status='refunded';const movements=[],products=new Map();s.items.forEach(i=>{const p=P.find(p=>p.id==i.id);movements.push(mv(p,'return',i.qty,id));products.set(p.id,p)});
+ if(await persistOrReload({sales:[s],products:[...products.values()],movements})){toast(`Refunded ${money(s.total)}. Stock restored.`);render()}
 }
 function csv(w){
  const rows=w=='sales'?[['id','time','total','status'],...S.map(s=>[s.id,s.t.toISOString(),s.total.toFixed(2),s.status])]:[['time','product','type','qty','ref','by'],...M.map(m=>[m.t.toISOString(),m.name,m.type,m.qty,m.ref,m.by])];
@@ -270,6 +297,7 @@ document.addEventListener('click',e=>{
  const b=e.target.closest('[data-act]');if(!b)return;const a=b.dataset.act,id=b.dataset.id;
  if(a=='bg'){if(e.target==b)closeM();return}
  if(a=='select')return;
+ if(a=='signout'){window.shopkeepAuth.signOut().then(()=>location.assign('login.html'));return}
  ({go:()=>{view=b.dataset.v;render()},add:()=>add(id),inc:()=>add(id),
  dec:()=>{const l=cart.find(x=>x.id==id);l.qty--;if(l.qty<1)cart=cart.filter(x=>x!=l);cartUI()},
  clear:()=>{cart=[];cartUI()},pay:payModal,confirm:confirmPay,close:closeM,print:()=>toast('Printing is handled by the browser in the live app.'),
@@ -277,11 +305,17 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('change',e=>{
  const a=e.target.dataset.act;
- if(a=='role'){role=e.target.value;cart=[];render()}
  if(a=='disc'){disc=+e.target.value;cartUI()}
 });
 document.addEventListener('keydown',e=>{if(e.key=='Escape')closeM()});
-render();
+if(!window.shopkeepFirebaseConfigured){
+ $('#nav').style.display='none';$('.shell').style.gridTemplateColumns='1fr';
+ $('#main').innerHTML='<section class="auth-main"><h1>Connect Firebase</h1><div class="card"><p>Set your Firebase web app settings in <b>firebase-config.js</b>, enable Email/Password Authentication, create a Firestore database, and deploy <b>firestore.rules</b>.</p></div></section>';
+}else window.shopkeepAuth.onAuthStateChanged(async current=>{
+ if(!current){location.replace('login.html');return}
+ user=current;
+ try{await loadStore(current)}catch(e){$('#main').innerHTML=`<section class="auth-main"><h1>Could not load store</h1><div class="card"><p>${esc(e.message)}</p><button class="btn" data-act="signout">Sign out</button></div></section>`}
+});
 </script>
 </body>
 </html>
