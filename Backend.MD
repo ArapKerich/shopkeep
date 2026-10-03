@@ -2,17 +2,22 @@
 
 This guide describes the Firebase pieces currently connected to Shopkeep and the recommended steps for adding real payments with Stripe or Safaricom M-Pesa Daraja.
 
+Firebase client files and security rules are grouped under `backend/`. The Firebase CLI manifest remains `firebase.json` at the repository root. Current account and store flows use Authentication and Firestore directly; they do not require Cloud Functions.
+
 ## What Is Connected Today
 
-- `firebase-config.js` contains the Firebase Web app configuration. These values identify the project; they are not service-account credentials.
-- `firebase.js` initializes the Firebase browser SDK, Authentication, and Firestore when those SDKs are present on the page.
+- `backend/firebase-config.js` contains the Firebase Web app configuration. These values identify the project; they are not service-account credentials.
+- `backend/firebase.js` initializes the Firebase browser SDK, Authentication, and Firestore when those SDKs are present on the page.
 - `login.html` and `signup.html` provide email/password sign-in, account creation, and password reset through `auth-page.js`.
-- `index.html` listens for Firebase Auth state. Signed-out users are sent to `login.html`; signed-in users load their store data.
-- A new user's store ID defaults to their Firebase Auth UID. A trusted custom claim can instead provide `storeId` and `role` for staff accounts.
-- The first load of an empty owner store seeds it with the sample product list in `index.html`.
+- `admin/index.html` is the authenticated staff console, including in-page user management and logs. Signed-out users are sent to `login.html`; signed-in users load their store data.
+- `store/index.html` is the separate customer storefront. It reads the safe public catalog and creates order requests; it does not collect payments.
+- A new store owner's store ID defaults to their Firebase Auth UID. Staff/admin memberships and roles are stored in `shop_memberships/{uid}` and mirrored in the store's `users` collection.
+- The first load of an empty owner store seeds it with the sample product list in `admin/index.html`.
 - Product changes, stock adjustments, sales, and stock movements are written to Firestore using client-side write batches. Failed writes trigger a data reload and an error toast.
-- `firestore.rules` scopes reads and writes to a user's own store or a store ID in their verified token claims.
-- `firebase.json` points the Firebase CLI at `firestore.rules`.
+- Admins create Auth users with a secondary Firebase Auth app, then write role, membership, profile, and activity records through Firestore rules.
+- Customers create Auth accounts and their own customer profile document. Passwords are never written to Firestore.
+- `backend/firestore.rules` scopes store data, controls membership and user/audit access, exposes only the public catalog, and validates customer order requests.
+- `firebase.json` points the Firebase CLI at the rules and configures Hosting.
 
 ## Firestore Data Layout
 
@@ -20,11 +25,18 @@ The app uses these paths:
 
 ```text
 shops/{storeId}/products/{productId}
+shops/{storeId}/public_products/{productId}
 shops/{storeId}/sales/{saleId}
 shops/{storeId}/stock_movements/{movementId}
+shops/{storeId}/users/{uid}
+shops/{storeId}/activity_logs/{logId}
+shops/{storeId}/orders/{orderId}
+customers/{uid}
 ```
 
-Products contain fields such as `sku`, `name`, `cat`, `emoji`, `cost`, `price`, `stock`, and `reorder`.
+Private products contain fields such as `sku`, `name`, `cat`, `emoji`, optional `imageUrl`, `cost`, `price`, `stock`, and `reorder`. The public catalog mirror includes the optional public `imageUrl`, but deliberately excludes cost and SKU data.
+
+Managed user profiles contain the Auth UID, email, store ID, `admin` or `staff` role, status, and creation metadata. Pending email changes are stored as `pendingEmail` until the user verifies the address through Firebase Auth. Password setup/reset emails are sent by Firebase Auth. Customer profiles are created by the signed-in customer and are separate from store staff. Activity records include sign-ins and user create/role-change/removal events. Customer order documents are requests with an estimated total; they do not represent paid sales.
 
 Sales contain `t`, `items`, `sub`, `disc`, `tax`, `total`, `status`, `by`, and optionally `email`. Each item records its product ID, name, quantity, and price at the time of sale.
 
@@ -34,7 +46,8 @@ The current checkout is explicitly a demo: it writes a sale with `status: record
 
 ## Important Production Gaps
 
-- Browser code and custom UI roles are not a security boundary. Firestore rules must enforce who can read and write each record. Never let a client set its own custom claims.
+- Browser UI checks are not the security boundary. Firestore rules validate membership documents on every store access, so removed users lose access even if they can still authenticate. Never allow users to write their own membership role.
+- Client-only removal revokes store access but cannot delete an account from Firebase Authentication. Deleting Auth accounts requires a trusted Admin SDK environment, which would require Cloud Functions or another server.
 - Current client batches group related writes, but they do not provide server-side pricing validation or protect against two cashiers selling the same last item at once. Use a trusted backend transaction for paid orders and stock changes.
 - Payment status must come from a verified provider webhook/callback, not from a browser redirect or a client saying payment succeeded.
 - Never store card numbers, CVVs, Stripe secret keys, Daraja consumer secrets, or passkeys in Firestore or browser files.

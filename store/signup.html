@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Create customer account | Shopkeep</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="account.css">
+</head>
+<body data-mode="signup">
+  <header class="top"><a class="brand" href="./">shop<i>keep</i></a><a id="back-to-shop" href="./">Back to shop</a></header>
+  <main class="layout"><section class="visual"><div><span class="eyebrow" style="color:var(--lime)">Shopkeep Market</span><h2>Good things are just around the corner.</h2><p>Create an account with your local shop to make ordering easier.</p></div></section><section class="form-panel"><span class="eyebrow">Customer account</span><h1>Join the shop</h1><p class="intro">Your details help the shop confirm your order.</p><form class="form" id="account-form"><label>Full name<input name="name" autocomplete="name" minlength="2" maxlength="100" required></label><label>Email address<input name="email" type="email" autocomplete="email" required></label><label>Phone number<input name="phone" type="tel" autocomplete="tel" minlength="7" maxlength="24" placeholder="07xx xxx xxx" required></label><label>Password<input name="password" type="password" autocomplete="new-password" minlength="6" required></label><p class="form-message" id="account-message" role="status"></p><button class="submit" type="submit">Create account</button></form><p class="fineprint">Your details are shared with the shop for order updates.</p><p class="form-footer">Already have an account? <a id="switch-account" href="login.html">Sign in</a></p></section></main>
+  <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-auth-compat.js"></script><script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore-compat.js"></script><script src="../backend/firebase-config.js"></script><script src="../backend/firebase.js"></script><script src="account.js"></script>
+</body>
+</html>

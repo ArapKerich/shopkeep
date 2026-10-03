@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Customer sign in | Shopkeep</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="account.css">
+</head>
+<body data-mode="login">
+  <header class="top"><a class="brand" href="./">shop<i>keep</i></a><a id="back-to-shop" href="./">Back to shop</a></header>
+  <main class="layout"><section class="visual"><div><span class="eyebrow" style="color:var(--lime)">Shopkeep Market</span><h2>Your neighbourhood shop, close at hand.</h2><p>Sign in to make ordering quicker.</p></div></section><section class="form-panel"><span class="eyebrow">Customer account</span><h1>Welcome back</h1><p class="intro">Sign in to continue shopping with your local store.</p><form class="form" id="account-form"><label>Email address<input name="email" type="email" autocomplete="email" required></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="6" required></label><p class="form-message" id="account-message" role="status"></p><button class="submit" type="submit">Sign in</button></form><button class="form-footer" id="reset-password" type="button" style="border:0;background:none;padding:0;cursor:pointer">Forgot password?</button><p class="form-footer">New to this shop? <a id="switch-account" href="signup.html">Create an account</a></p></section></main>
+  <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-auth-compat.js"></script><script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore-compat.js"></script><script src="../backend/firebase-config.js"></script><script src="../backend/firebase.js"></script><script src="account.js"></script>
+</body>
+</html>
