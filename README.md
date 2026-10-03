@@ -12,7 +12,7 @@ No install or build step. Open `index.html` in a browser.
 - **Sell**: barcode/SKU search, product tiles, cart with discount and 16% VAT, mock card payment, receipt.
 - **Products**: search, add, edit, adjust stock.
 - **Stock log**: permanent record of every stock change.
-- **Roles**: owner, manager and cashier see different screens (switch with the dropdown in the sidebar).
+- **Portals**: Admin (everything, including adding and removing staff in the Team screen), Staff (sell, add and remove products), Shopper (browse and buy only). Pick one on the landing screen.
 
 ## Next steps (backend hookup)
 
