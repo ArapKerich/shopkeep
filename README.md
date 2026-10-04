@@ -15,7 +15,7 @@ Shopkeep is a small-shop inventory console and a separate customer storefront fo
 
 Serve the repository root over HTTP, then open `/store/` or `/admin/`. For example, use the VS Code Live Server extension or `firebase emulators:start` after installing/configuring the Firebase CLI. Opening files directly with `file://` will not support Firebase authentication or Firestore.
 
-The admin page links to a shop URL with its store ID. Share that URL with customers. Opening `/store/` directly auto-selects the only published shop, or shows a shop picker if there are multiple shops. Root `index.html` preserves a supplied store ID when forwarding to the storefront, while `login.html` is the staff sign-in page.
+The admin page links to a shop URL with its store ID. Share that URL with customers. Opening `/store/` directly auto-selects the only published shop, or shows a shop picker if there are multiple shops. The storefront does not assume a hard-coded store ID, so a missing URL parameter triggers shop discovery. Root `index.html` preserves a supplied store ID when forwarding to the storefront, while `login.html` is the staff sign-in page.
 
 ## Firebase setup and deployment
 

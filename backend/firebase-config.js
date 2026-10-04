@@ -6,4 +6,5 @@ window.SHOPKEEP_FIREBASE_CONFIG = {
   messagingSenderId: "248416241581",
   appId: "1:248416241581:web:e7e5623c1f2b888ee30324",
 };
-window.SHOPKEEP_DEFAULT_STORE_ID = 'EFts4lAKg1dZasKupR1uQL9TJV73';
+// Leave the default unset so the storefront discovers published shops unless
+// the URL supplies a specific ?store=... ID.

@@ -1,18 +1,29 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ─── Helper Functions ────────────────────────────────────────────────────
+
+    // Returns true if the request comes from a logged-in user.
     function signedIn() {
       return request.auth != null;
     }
 
+    // Returns true if the given userId has a document in shop_memberships,
+    // meaning they have been formally added as a store staff/admin member.
     function hasMembership(userId) {
       return exists(/databases/$(database)/documents/shop_memberships/$(userId));
     }
 
+    // Returns true if the given userId has a document in the customers collection,
+    // meaning they are a registered customer (not a store employee).
     function isCustomer(userId) {
       return exists(/databases/$(database)/documents/customers/$(userId));
     }
 
+    // Returns true if the user is the "bootstrap owner" — the very first time an
+    // owner signs in before any membership document has been created for them.
+    // Conditions: signed in + their UID matches the storeId + no membership doc + not a customer.
     function isBootstrapOwner(storeId) {
       return signedIn()
         && request.auth.uid == storeId
@@ -20,34 +31,51 @@ service cloud.firestore {
         && !isCustomer(request.auth.uid);
     }
 
+    // Returns true if the user is an active member of the given store (any role).
+    // Three paths to qualify:
+    //   1. Bootstrap owner (first-time owner with no membership doc yet).
+    //   2. Has a membership doc for this store with status "active" and role admin or staff.
+    //   3. No membership doc, not a customer, but their auth token carries the storeId
+    //      and a recognised staff role (owner/admin/manager/staff/cashier).
     function isStoreMember(storeId) {
       return signedIn()
         && (isBootstrapOwner(storeId)
-          || (hasMembership(request.auth.uid)
-            && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.storeId == storeId
-            && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.status == 'active'
-            && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.role in ['admin', 'staff'])
-          || (!hasMembership(request.auth.uid)
-            && !isCustomer(request.auth.uid)
-            && request.auth.token.storeId == storeId
-            && request.auth.token.role in ['owner', 'admin', 'manager', 'staff', 'cashier']));
+        || (hasMembership(request.auth.uid)
+        && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.storeId == storeId
+        && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.status == 'active'
+        && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.role in ['admin', 'staff'])
+        || (!hasMembership(request.auth.uid)
+        && !isCustomer(request.auth.uid)
+        && request.auth.token.storeId == storeId
+        && request.auth.token.role in ['owner', 'admin', 'manager', 'staff', 'cashier']));
     }
 
+    // Returns true if the user is an admin (or owner) of the given store.
+    // Same three paths as isStoreMember, but restricted to admin/owner roles only.
     function isStoreAdmin(storeId) {
       return signedIn()
         && (isBootstrapOwner(storeId)
-          || (hasMembership(request.auth.uid)
-            && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.storeId == storeId
-            && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.status == 'active'
-            && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.role == 'admin')
-          || (!hasMembership(request.auth.uid)
-            && !isCustomer(request.auth.uid)
-            && request.auth.token.storeId == storeId
-            && request.auth.token.role in ['owner', 'admin']));
+        || (hasMembership(request.auth.uid)
+        && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.storeId == storeId
+        && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.status == 'active'
+        && get(/databases/$(database)/documents/shop_memberships/$(request.auth.uid)).data.role == 'admin')
+        || (!hasMembership(request.auth.uid)
+        && !isCustomer(request.auth.uid)
+        && request.auth.token.storeId == storeId
+        && request.auth.token.role in ['owner', 'admin']));
     }
 
+    // ─── /customers/{customerId} ─────────────────────────────────────────────
+    // Stores registered customer profiles (shoppers, not store staff).
     match /customers/{customerId} {
+      // A customer can only read their own profile.
       allow read: if signedIn() && request.auth.uid == customerId;
+
+      // A customer can create their own profile if:
+      //   - The document ID matches their UID.
+      //   - Only the allowed fields are present (no extra fields).
+      //   - Required fields have correct types.
+      //   - createdAt is set to the server timestamp (prevents backdating).
       allow create: if signedIn()
         && request.auth.uid == customerId
         && request.resource.data.keys().hasOnly(['uid', 'email', 'displayName', 'phone', 'storeId', 'createdAt'])
@@ -57,99 +85,171 @@ service cloud.firestore {
         && request.resource.data.phone is string
         && request.resource.data.storeId is string
         && request.resource.data.createdAt == request.time;
+
+      // A customer can update only their own displayName and phone; all other
+      // fields (email, storeId, uid, etc.) are immutable after creation.
       allow update: if signedIn()
         && request.auth.uid == customerId
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'phone']);
+
+      // Customers cannot be deleted through the client SDK.
       allow delete: if false;
     }
 
+    // ─── /shop_memberships/{userId} ──────────────────────────────────────────
+    // Links a user UID to a store, with a role (admin/staff) and status.
     match /shop_memberships/{userId} {
+      // A member can read their own membership doc; store admins can read any
+      // membership belonging to their store.
       allow get: if signedIn()
         && (request.auth.uid == userId || isStoreAdmin(resource.data.storeId));
+
+      // Listing memberships is disabled — admins query the /shops/{storeId}/users
+      // sub-collection instead.
       allow list: if false;
+
+      // Only a store admin can create a membership, and only for admin/staff roles
+      // with an active status. Prevents self-promotion by non-admins.
       allow create: if isStoreAdmin(request.resource.data.storeId)
         && request.resource.data.uid == userId
         && request.resource.data.role in ['admin', 'staff']
         && request.resource.data.status == 'active';
+
+      // Two update paths:
+      //   1. Store admin: can change role and status (including setting 'removed'),
+      //      but cannot change the storeId or uid.
+      //   2. The member themselves: can update only their email address (to confirm
+      //      a pending email-change request) and only when the pending email on the
+      //      doc matches their current auth token email.
       allow update: if isStoreAdmin(resource.data.storeId)
         && request.resource.data.uid == userId
         && request.resource.data.storeId == resource.data.storeId
         && request.resource.data.role in ['admin', 'staff']
         && request.resource.data.status in ['active', 'removed']
         || (signedIn()
-          && request.auth.uid == userId
-          && isStoreMember(resource.data.storeId)
-          && request.resource.data.storeId == resource.data.storeId
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.status == resource.data.status
-          && resource.data.pendingEmail == request.auth.token.email
-          && request.resource.data.email == request.auth.token.email
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'pendingEmail', 'emailChangeRequestedAt', 'emailChangeRequestedBy']));
+        && request.auth.uid == userId
+        && isStoreMember(resource.data.storeId)
+        && request.resource.data.storeId == resource.data.storeId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && resource.data.pendingEmail == request.auth.token.email
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'pendingEmail', 'emailChangeRequestedAt', 'emailChangeRequestedBy']));
+
+      // Memberships cannot be hard-deleted; use status 'removed' instead.
       allow delete: if false;
     }
 
+    // ─── /shops/{storeId}/products/{productId} ───────────────────────────────
+    // Internal product catalogue — only visible and editable by store members.
     match /shops/{storeId}/products/{productId} {
       allow read, write: if isStoreMember(storeId);
     }
 
+    // ─── /shops/{storeId}/sales/{saleId} ─────────────────────────────────────
+    // Point-of-sale transaction records — accessible only to store members.
     match /shops/{storeId}/sales/{saleId} {
       allow read, write: if isStoreMember(storeId);
     }
 
+    // ─── /shops/{storeId}/stock_movements/{movementId} ───────────────────────
+    // Inventory movement records (stock-in, adjustments, etc.) — store members only.
     match /shops/{storeId}/stock_movements/{movementId} {
       allow read, write: if isStoreMember(storeId);
     }
 
+    // ─── /shops/{storeId}/public_products/{productId} ────────────────────────
+    // Public-facing product listings (e.g., for a customer-facing shop page).
+    // Anyone (including unauthenticated users) can read; only store members can write.
     match /shops/{storeId}/public_products/{productId} {
       allow read: if true;
       allow write: if isStoreMember(storeId);
     }
 
+    // ─── /shops/{storeId}/users/{userId} ─────────────────────────────────────
+    // Store-level mirror of user records, used for admin dashboards.
     match /shops/{storeId}/users/{userId} {
+      // Only store admins can list/read user records.
       allow read: if isStoreAdmin(storeId);
+
+    // Store admins can add a user record; uid and storeId must match path
+      // segments, role must be admin or staff, and status must be active.
       allow create: if isStoreAdmin(storeId)
         && request.resource.data.uid == userId
         && request.resource.data.storeId == storeId
         && request.resource.data.role in ['admin', 'staff']
         && request.resource.data.status == 'active';
+
+      // Two update paths (mirrors shop_memberships update logic):
+      //   1. Store admin: can change role and status, but uid and storeId are locked.
+      //   2. The user themselves: can confirm a pending email change — only the
+      //      email-related fields may change and only when the pending email matches.
       allow update: if isStoreAdmin(storeId)
         && request.resource.data.uid == userId
         && request.resource.data.storeId == storeId
         && request.resource.data.role in ['admin', 'staff']
         && request.resource.data.status in ['active', 'removed']
         || (signedIn()
-          && request.auth.uid == userId
-          && isStoreMember(storeId)
-          && request.resource.data.storeId == storeId
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.status == resource.data.status
-          && resource.data.pendingEmail == request.auth.token.email
-          && request.resource.data.email == request.auth.token.email
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'pendingEmail', 'emailChangeRequestedAt', 'emailChangeRequestedBy']));
+        && request.auth.uid == userId
+        && isStoreMember(storeId)
+        && request.resource.data.storeId == storeId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && resource.data.pendingEmail == request.auth.token.email
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'pendingEmail', 'emailChangeRequestedAt', 'emailChangeRequestedBy']));
+
+      // User records are never hard-deleted from the client.
       allow delete: if false;
     }
 
+    // ─── /shops/{storeId}/activity_logs/{logId} ──────────────────────────────
+    // Append-only audit log of actions taken within the store.
     match /shops/{storeId}/activity_logs/{logId} {
+      // Only store admins can read the audit log.
       allow read: if isStoreAdmin(storeId);
+
+      // Creates are allowed for three actor types, but createdAt must always be
+      // the server timestamp to prevent log tampering:
+      //   1. Store admin: unrestricted log creation.
+      //   2. Store member: can only log their own signed_in or email_changed events,
+    //      and for email_changed the subjectEmail must match their auth token email.
+      //   3. Customer: can log their own signed_in or customer_registered events,
+      //      provided they belong to this store.
       allow create: if (isStoreAdmin(storeId)
-          || (isStoreMember(storeId)
-            && request.resource.data.actorUid == request.auth.uid
-              && request.resource.data.action in ['signed_in', 'email_changed']
-              && (request.resource.data.action != 'email_changed'
-                || request.resource.data.subjectEmail == request.auth.token.email))
-            || (signedIn()
-              && isCustomer(request.auth.uid)
-              && get(/databases/$(database)/documents/customers/$(request.auth.uid)).data.storeId == storeId
-              && request.resource.data.actorUid == request.auth.uid
-              && request.resource.data.action in ['signed_in', 'customer_registered']))
+        || (isStoreMember(storeId)
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.action in ['signed_in', 'email_changed']
+        && (request.resource.data.action != 'email_changed'
+        || request.resource.data.subjectEmail == request.auth.token.email))
+        || (signedIn()
+        && isCustomer(request.auth.uid)
+        && get(/databases/$(database)/documents/customers/$(request.auth.uid)).data.storeId == storeId
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.action in ['signed_in', 'customer_registered']))
         && request.resource.data.createdAt == request.time;
+
+      // Audit logs are immutable — no updates or deletes allowed.
       allow update, delete: if false;
     }
 
+    // ─── /shops/{storeId}/orders/{orderId} ───────────────────────────────────
+    // Customer orders placed through the public-facing storefront.
     match /shops/{storeId}/orders/{orderId} {
+      // Anyone (including guests) can create an order, but strict validation applies:
+      //   - Only the defined fields are allowed (no extra fields).
+      //   - customerName: 2–100 chars string.
+      //   - email: valid-length string (max 254 chars, the RFC limit).
+      //   - phone: 7–24 chars string.
+      //   - items: non-empty list of up to 30 items.
+      //   - total: non-negative number, capped at 1,000,000.
+      //   - status must be 'new' on creation (cannot pre-set fulfilled/cancelled).
+      //   - If customerUid is present, the requester must be signed in and the
+    //     uid must match their own (prevents spoofing another user's UID).
+      //   - createdAt must be the server timestamp.
       allow create: if request.resource.data.keys().hasOnly([
-          'customerName', 'email', 'phone', 'items', 'total', 'status', 'createdAt', 'customerUid'
-        ])
+      'customerName', 'email', 'phone', 'items', 'total', 'status', 'createdAt', 'customerUid'
+      ])
         && request.resource.data.customerName is string
         && request.resource.data.customerName.size() >= 2
         && request.resource.data.customerName.size() <= 100
@@ -166,11 +266,18 @@ service cloud.firestore {
         && request.resource.data.total <= 1000000
         && request.resource.data.status == 'new'
         && (!request.resource.data.keys().hasAny(['customerUid'])
-          || (signedIn() && request.resource.data.customerUid == request.auth.uid))
+        || (signedIn() && request.resource.data.customerUid == request.auth.uid))
         && request.resource.data.createdAt == request.time;
+
+      // Store members can read all orders; a signed-in customer can read only
+      // orders where their UID is recorded as customerUid.
       allow read: if isStoreMember(storeId)
         || (signedIn() && resource.data.customerUid == request.auth.uid);
+
+      // Only store members can update orders (e.g., change status to fulfilled).
       allow update: if isStoreMember(storeId);
+
+      // Only store admins can delete orders.
       allow delete: if isStoreAdmin(storeId);
     }
   }
